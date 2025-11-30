@@ -11,12 +11,53 @@ SERVER_PORT = 38656
 USERNAME = "AFKBot"
 PASSWORD = "123456"
 AUTO_AUTH = True
-RECONNECT_DELAY = 5  # seconds before reconnecting
+RECONNECT_DELAY = 30  # safer reconnect delay
+MAX_SESSION_TIME = 60 * 60  # optional max session 1 hour
+
+# --- HUMAN-LIKE ACTIONS ---
+def human_like_behavior(conn):
+    """Perform random actions to look human."""
+    yaw = random.uniform(0, 360)
+    start_time = time.time()
+
+    while conn.connected:
+        # Randomly move small distances
+        try:
+            # Random chance to move or look around
+            if random.random() < 0.5:
+                # Random look direction
+                yaw += random.uniform(-30, 30)
+                pkt = serverbound.play.PlayerPositionAndRotationPacket()
+                pkt.x = math.cos(math.radians(yaw)) * random.uniform(0, 0.5)
+                pkt.y = 0
+                pkt.z = math.sin(math.radians(yaw)) * random.uniform(0, 0.5)
+                pkt.yaw = yaw
+                pkt.pitch = random.uniform(-10, 10)
+                pkt.on_ground = True
+                conn.write_packet(pkt)
+
+            # Random jump
+            if random.random() < 0.1:
+                jump_pkt = serverbound.play.PlayerAbilitiesPacket()
+                jump_pkt.flags = 0x02
+                conn.write_packet(jump_pkt)
+
+            # Random idle pauses
+            time.sleep(random.uniform(5, 20))
+
+            # Optional: end session after max session time to simulate human
+            if MAX_SESSION_TIME and time.time() - start_time > MAX_SESSION_TIME:
+                print("[INFO] Max session reached. Logging out.")
+                conn.disconnect()
+                return
+
+        except Exception as e:
+            print("[ERROR] Human-like behavior stopped:", e)
+            break
 
 
-# --- FUNCTIONS ---
-def keep_alive(conn):
-    """Send periodic packets to prevent disconnection."""
+def auto_keep_alive(conn):
+    """Send minimal keep-alive packets to prevent timeout."""
     while conn.connected:
         try:
             pkt = serverbound.play.PlayerPositionAndRotationPacket()
@@ -27,85 +68,45 @@ def keep_alive(conn):
             pkt.pitch = 0
             pkt.on_ground = True
             conn.write_packet(pkt)
-        except Exception as e:
-            print("[ERROR] Keep-alive stopped:", e)
+        except:
             break
-        time.sleep(10)
-
-
-def afk_movement(conn):
-    """Random small movements and occasional jumps to avoid AFK kick."""
-    yaw = random.uniform(0, 360)
-    while conn.connected:
-        try:
-            # Move forward for 1–2 seconds
-            duration = random.uniform(1.0, 2.5)
-            start_time = time.time()
-            while time.time() - start_time < duration and conn.connected:
-                pkt = serverbound.play.PlayerPositionAndRotationPacket()
-                pkt.x = math.cos(math.radians(yaw)) * 0.3
-                pkt.y = 0
-                pkt.z = math.sin(math.radians(yaw)) * 0.3
-                pkt.yaw = yaw
-                pkt.pitch = 0
-                pkt.on_ground = True
-                conn.write_packet(pkt)
-
-                # Occasional jump (10% chance per step)
-                if random.random() < 0.1:
-                    jump_pkt = serverbound.play.PlayerAbilitiesPacket()
-                    jump_pkt.flags = 0x02
-                    conn.write_packet(jump_pkt)
-
-                time.sleep(0.5)  # step interval
-
-            # Randomly change direction
-            yaw += random.uniform(-30, 30)
-
-        except Exception as e:
-            print("[ERROR] AFK movement stopped:", e)
-            break
+        time.sleep(15)  # slightly longer interval for safer behavior
 
 
 def run_bot():
-    """Main loop: connect, stay online, and auto-reconnect."""
+    """Main bot loop with safer reconnects and human-like behavior."""
     while True:
         try:
             conn = Connection(SERVER_IP, SERVER_PORT, username=USERNAME)
             print("[INFO] Connecting...")
 
-            # Exception handler
             @conn.register_exception_handler
             def on_exception(exc):
                 print("[ERROR] Disconnected:", exc)
                 conn.connected = False
 
-            # Disconnect handler (handles kicks too)
             @conn.listener(clientbound.play.DisconnectPacket)
             def on_disconnect(packet):
-                print(f"[INFO] Disconnected from server: {packet.json_data}")
+                print(f"[INFO] Disconnected: {packet.json_data}")
                 conn.connected = False
 
-            # Join game
             @conn.listener(clientbound.play.JoinGamePacket)
             def join_game(packet):
                 print("[INFO] Joined server!")
 
-                # Start keep-alive and AFK threads
-                t1 = threading.Thread(target=keep_alive, args=(conn,))
+                # Start threads for human-like behavior
+                t1 = threading.Thread(target=auto_keep_alive, args=(conn,))
                 t1.daemon = True
                 t1.start()
 
-                t2 = threading.Thread(target=afk_movement, args=(conn,))
+                t2 = threading.Thread(target=human_like_behavior, args=(conn,))
                 t2.daemon = True
                 t2.start()
 
-            # Chat handler for auto auth
             @conn.listener(clientbound.play.ChatMessagePacket)
             def handle_chat(packet):
                 msg = packet.json_data.lower()
                 print("[CHAT]", msg)
-
                 if AUTO_AUTH:
                     if "register" in msg:
                         conn.write_packet(serverbound.play.ChatPacket(
@@ -116,20 +117,20 @@ def run_bot():
                             message=f"/login {PASSWORD}"
                         ))
 
-            # Connect
             conn.connect()
 
-            # Main thread waits while connected
+            # Keep main thread alive while connected
             while conn.connected:
                 time.sleep(1)
 
         except Exception as e:
             print("[ERROR] Connection failed:", e)
 
-        print(f"[INFO] Reconnecting in {RECONNECT_DELAY} seconds...")
-        time.sleep(RECONNECT_DELAY)
+        # Safer reconnect delay to reduce detection
+        wait_time = RECONNECT_DELAY + random.randint(0, 20)
+        print(f"[INFO] Reconnecting in {wait_time} seconds...")
+        time.sleep(wait_time)
 
 
-# --- RUN BOT ---
 if __name__ == "__main__":
     run_bot()
